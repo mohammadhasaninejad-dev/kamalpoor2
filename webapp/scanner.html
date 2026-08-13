@@ -4,24 +4,23 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
   <title>اسکنر بارکد</title>
+  <!-- هر دو SDK؛ اسکریپت پایین تشخیص می‌دهد کدام در دسترس است -->
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  <script src="https://tapi.bale.ai/miniapp.js?3"></script>
   <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-      background: var(--tg-theme-bg-color, #ffffff);
-      color: var(--tg-theme-text-color, #000000);
+      background: var(--tg-theme-bg-color, var(--bale-bg-color, #ffffff));
+      color: var(--tg-theme-text-color, var(--bale-text-color, #000000));
       min-height: 100vh;
       display: flex;
       flex-direction: column;
       align-items: center;
       padding: 16px;
     }
-    h2 {
-      margin-bottom: 12px;
-      font-size: 1.3rem;
-    }
+    h2 { margin-bottom: 12px; font-size: 1.3rem; }
     #reader {
       width: 100%;
       max-width: 400px;
@@ -61,6 +60,11 @@
       margin-top: 12px;
       text-align: center;
     }
+    .platform {
+      margin-top: 8px;
+      font-size: 0.8rem;
+      opacity: 0.6;
+    }
   </style>
 </head>
 <body>
@@ -69,47 +73,81 @@
   <div class="info">دوربین را روی بارکد کالا بگیرید</div>
   <div id="result" class="result"></div>
   <div id="error" class="error"></div>
-  <button id="sendBtn" class="btn" style="display:none;">ارسال به بات</button>
+  <button id="sendBtn" class="btn" style="display:none;">ارسال به بازو</button>
+  <div id="platformLabel" class="platform"></div>
 
   <script>
-    const tg = window.Telegram.WebApp;
-    tg.ready();
-    tg.expand();
+    /**
+     * تشخیص پلتفرم و گرفتن آبجکت WebApp
+     * - تلگرام: window.Telegram.WebApp
+     * - بله: window.Bale.WebApp  (یا در بعضی نسخه‌ها window.BaleWebApp)
+     */
+    function getWebApp() {
+      if (window.Bale && window.Bale.WebApp) {
+        return { platform: "bale", app: window.Bale.WebApp };
+      }
+      if (window.BaleWebApp) {
+        return { platform: "bale", app: window.BaleWebApp };
+      }
+      if (window.Telegram && window.Telegram.WebApp) {
+        return { platform: "telegram", app: window.Telegram.WebApp };
+      }
+      return { platform: "unknown", app: null };
+    }
+
+    const { platform, app: tg } = getWebApp();
+    document.getElementById("platformLabel").innerText =
+      platform === "bale" ? "پلتفرم: بله" :
+      platform === "telegram" ? "پلتفرم: تلگرام" : "پلتفرم نامشخص";
+
+    if (tg) {
+      try { tg.ready(); } catch (e) {}
+      try { tg.expand(); } catch (e) {}
+    }
 
     let lastCode = null;
     const resultEl = document.getElementById("result");
     const errorEl = document.getElementById("error");
     const sendBtn = document.getElementById("sendBtn");
 
-    function onScanSuccess(decodedText, decodedResult) {
+    function sendToBot(code) {
+      if (!tg || typeof tg.sendData !== "function") {
+        errorEl.innerText = "امکان ارسال داده به بازو وجود ندارد. داخل اپ تلگرام/بله باز کنید.";
+        return;
+      }
+      try {
+        tg.sendData(code);
+        try { tg.close(); } catch (e) {}
+      } catch (e) {
+        errorEl.innerText = "خطا در ارسال: " + e;
+      }
+    }
+
+    function onScanSuccess(decodedText) {
       if (decodedText === lastCode) return;
       lastCode = decodedText;
 
-      // توقف اسکنر
       html5QrCode.stop().then(() => {
         resultEl.style.display = "block";
         resultEl.innerText = "بارکد: " + decodedText;
         sendBtn.style.display = "block";
-        sendBtn.onclick = () => {
-          tg.sendData(decodedText);
-          tg.close();
-        };
-        // لرزش موفقیت
-        try { tg.HapticFeedback.notificationOccurred("success"); } catch(e) {}
-      }).catch(err => {
-        console.error(err);
-      });
+        sendBtn.onclick = () => sendToBot(decodedText);
+        try {
+          if (tg && tg.HapticFeedback) {
+            tg.HapticFeedback.notificationOccurred("success");
+          }
+        } catch (e) {}
+      }).catch(err => console.error(err));
     }
 
-    function onScanFailure(error) {
-      // نادیده گرفتن خطاهای مکرر اسکن
-    }
+    function onScanFailure() {}
 
     const html5QrCode = new Html5Qrcode("reader");
     const config = {
       fps: 10,
       qrbox: { width: 250, height: 150 },
       aspectRatio: 1.0,
+      formatsToSupported: undefined,
       formatsToSupport: [
         Html5QrcodeSupportedFormats.EAN_13,
         Html5QrcodeSupportedFormats.EAN_8,
@@ -124,7 +162,6 @@
 
     Html5Qrcode.getCameras().then(cameras => {
       if (cameras && cameras.length) {
-        // ترجیح دوربین پشت
         let cameraId = cameras[0].id;
         for (let cam of cameras) {
           if (cam.label && (cam.label.toLowerCase().includes("back") || cam.label.toLowerCase().includes("rear"))) {
